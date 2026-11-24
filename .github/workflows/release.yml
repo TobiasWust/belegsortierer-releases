@@ -72,6 +72,8 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest*.yml
             CHANGELOG.md
 
   veroeffentlichen:
@@ -105,7 +107,8 @@ jobs:
 
       - name: Release anlegen
         run: |
-          gh release create "v$VERSION" artefakte/dist/*.dmg artefakte/dist/*.exe \
+          # latest.yml und .blockmap braucht das Programm unter Windows, um sich selbst zu aktualisieren
+          gh release create "v$VERSION" artefakte/dist/*.dmg artefakte/dist/*.exe artefakte/dist/*.blockmap artefakte/dist/latest*.yml \
             --repo "$GITHUB_REPOSITORY" \
             --title "Version $VERSION" \
             --notes-file notes.md \
