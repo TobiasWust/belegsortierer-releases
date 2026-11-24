@@ -1,0 +1,112 @@
+name: Neue Version veröffentlichen
+run-name: Version ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versionsnummer, z. B. 1.2.0'
+        required: true
+        type: string
+      notes:
+        description: 'Was ist neu? (leer lassen = Abschnitt aus CHANGELOG.md)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bauen:
+    name: Bauen (${{ matrix.name }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            ziel: --mac --arm64
+          - name: Windows
+            os: windows-latest
+            ziel: --win --x64
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Versionsnummer prüfen
+        shell: bash
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Die Versionsnummer muss die Form 1.2.3 haben."
+            exit 1
+          fi
+
+      - name: Quellcode holen (privates Repository)
+        uses: actions/checkout@v4
+        with:
+          repository: TobiasWust/belegsortierer
+          ssh-key: ${{ secrets.QUELLCODE_SCHLUESSEL }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Versionsnummer eintragen
+        shell: bash
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - run: npm test
+
+      - name: Installer bauen
+        run: npx electron-builder ${{ matrix.ziel }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            dist/*.dmg
+            dist/*.exe
+            CHANGELOG.md
+
+  veroeffentlichen:
+    name: Veröffentlichen
+    needs: bauen
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      NOTES: ${{ inputs.notes }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefakte
+          merge-multiple: true
+
+      - name: Änderungstext bestimmen
+        run: |
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES" > notes.md
+          else
+            awk -v v="$VERSION" '
+              /^## / { drin = ($2 == v) ; next }
+              drin { print }
+            ' artefakte/CHANGELOG.md > notes.md
+          fi
+          if [ ! -s notes.md ] || ! grep -q '[^[:space:]]' notes.md; then
+            echo "Kleinere Verbesserungen." > notes.md
+          fi
+          cat notes.md
+
+      - name: Release anlegen
+        run: |
+          gh release create "v$VERSION" artefakte/dist/*.dmg artefakte/dist/*.exe \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Version $VERSION" \
+            --notes-file notes.md \
+            --latest
